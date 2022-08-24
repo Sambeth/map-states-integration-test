@@ -1,0 +1,96 @@
+{
+  "Comment": "A description of my state machine",
+  "StartAt": "Map",
+  "States": {
+    "Map": {
+      "Type": "Map",
+      "End": true,
+      "Iterator": {
+        "StartAt": "ListDataSetRevisions",
+        "States": {
+          "ListDataSetRevisions": {
+            "Type": "Task",
+            "Parameters": {
+              "DataSetId.$": "$.dataset_id",
+              "MaxResults": 1
+            },
+            "Resource": "arn:aws:states:::aws-sdk:dataexchange:listDataSetRevisions",
+            "Next": "EventBridge PutEvents"
+          },
+          "EventBridge PutEvents": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::events:putEvents",
+            "Parameters": {
+              "Entries": [
+                {
+                  "Detail": {
+                    "RevisionIds.$": "States.Array($.Revisions[0].Id)"
+                  },
+                  "DetailType": "Revision Published To Data Set",
+                  "Source": "gstest.dataexchange",
+                  "Resources.$": "States.Array($.Revisions[0].DataSetId)"
+                }
+              ]
+            },
+            "ResultPath": "$.output",
+            "Next": "Wait"
+          },
+          "Wait": {
+            "Type": "Wait",
+            "Seconds": 5,
+            "Next": "DynamoDB GetItem"
+          },
+          "DynamoDB GetItem": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::dynamodb:getItem",
+            "Parameters": {
+              "TableName": "Telemetry",
+              "Key": {
+                "dataset_id": {
+                  "S.$": "$.Revisions[0].DataSetId"
+                },
+                "revision_id": {
+                  "S.$": "$.Revisions[0].Id"
+                }
+              }
+            },
+            "ResultPath": "$.output",
+            "Next": "Should Poll DynamoDB"
+          },
+          "Should Poll DynamoDB": {
+            "Type": "Choice",
+            "Choices": [
+              {
+                "Variable": "$.output.Item.status.S",
+                "StringEquals": "SUCCEEDED",
+                "Next": "Succeed State"
+              },
+              {
+                "Variable": "$.output.Item.status.S",
+                "StringEquals": "EXECUTING",
+                "Next": "Wait for DynamoDB"
+              },
+              {
+                "Variable": "$.output.Item.status.S",
+                "StringEquals": "FAILED",
+                "Next": "Failed State"
+              }
+            ]
+          },
+          "Wait for DynamoDB": {
+            "Type": "Wait",
+            "Seconds": 10,
+            "Next": "DynamoDB GetItem"
+          },
+          "Succeed State": {
+            "Type": "Succeed"
+          },
+          "Failed State": {
+            "Type": "Fail"
+          }
+        }
+      },
+      "ItemsPath": "$.datasets"
+    }
+  }
+}
